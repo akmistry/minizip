@@ -1,5 +1,5 @@
 /* mz_zip_rw.c -- Zip reader/writer
-   Version 2.6.0, October 8, 2018
+   Version 2.7.2, November 2, 2018
    part of the MiniZip project
 
    Copyright (C) 2010-2018 Nathan Moinvaziri
@@ -64,7 +64,8 @@ typedef struct mz_zip_reader_s {
                 entry_cb;
     uint8_t     raw;
     uint8_t     buffer[UINT16_MAX];
-    uint8_t     legacy_encoding;
+    int32_t     encoding;
+    uint8_t     sign_required;
 } mz_zip_reader;
 
 /***************************************************************************/
@@ -90,7 +91,7 @@ int32_t mz_zip_reader_open(void *handle, void *stream)
     if (err != MZ_OK)
     {
         mz_zip_reader_close(handle);
-        return MZ_STREAM_ERROR;
+        return err;
     }
 
     mz_zip_reader_unzip_cd(reader);
@@ -410,10 +411,17 @@ int32_t mz_zip_reader_entry_open(void *handle)
         if (err == MZ_OK)
             mz_crypt_sha_begin(reader->hash);
 #ifndef MZ_ZIP_NO_SIGNING
-        if ((err == MZ_OK) && (mz_zip_reader_entry_has_sign(handle) == MZ_OK))
-            err = mz_zip_reader_entry_sign_verify(handle);
+        if (err == MZ_OK)
+        {
+            if (mz_zip_reader_entry_has_sign(handle) == MZ_OK)
+                err = mz_zip_reader_entry_sign_verify(handle);
+            else if (reader->sign_required)
+                err = MZ_SIGN_ERROR;
+        }
 #endif
     }
+    else if (reader->sign_required)
+        err = MZ_SIGN_ERROR;
 #endif
 
     return err;
@@ -504,7 +512,7 @@ int32_t mz_zip_reader_entry_sign_verify(void *handle)
     {
         signature = (uint8_t *)MZ_ALLOC(signature_size);
         if (mz_stream_read(file_extra_stream, signature, signature_size) != signature_size)
-            err = MZ_STREAM_ERROR;
+            err = MZ_READ_ERROR;
     }
 
     mz_stream_mem_delete(&file_extra_stream);
@@ -664,7 +672,7 @@ int32_t mz_zip_reader_entry_save_process(void *handle, void *stream, mz_stream_w
         // Write the data to the specified stream
         written = write_cb(stream, reader->buffer, read);
         if (written != read)
-            return MZ_STREAM_ERROR;
+            return MZ_WRITE_ERROR;
     }
 
     return read;
@@ -844,6 +852,7 @@ int32_t mz_zip_reader_save_all(void *handle, const char *destination_dir)
 {
     mz_zip_reader *reader = (mz_zip_reader *)handle;
     int32_t err = MZ_OK;
+    uint8_t *utf8_string = NULL;
     char path[512];
     char utf8_name[256];
     char resolved_name[256];
@@ -855,14 +864,17 @@ int32_t mz_zip_reader_save_all(void *handle, const char *destination_dir)
         // Construct output path
         path[0] = 0;
 
-        if ((reader->legacy_encoding) && (reader->file_info->flag & MZ_ZIP_FLAG_UTF8) == 0)
+        strncpy(utf8_name, reader->file_info->filename, sizeof(utf8_name) - 1);
+        utf8_name[sizeof(utf8_name) - 1] = 0;
+
+        if ((reader->encoding > 0) && (reader->file_info->flag & MZ_ZIP_FLAG_UTF8) == 0)
         {
-            mz_zip_encoding_cp437_to_utf8(reader->file_info->filename, utf8_name, sizeof(utf8_name));
-        }
-        else
-        {
-            strncpy(utf8_name, reader->file_info->filename, sizeof(utf8_name) - 1);
-            utf8_name[sizeof(utf8_name) - 1] = 0;
+            utf8_string = mz_os_utf8_string_create(reader->file_info->filename, reader->encoding);
+            if (utf8_string)
+            {
+                strncpy(utf8_name, (char *)utf8_string, sizeof(utf8_name));
+                mz_os_utf8_string_delete(&utf8_string);
+            }
         }
 
         err = mz_path_resolve(utf8_name, resolved_name, sizeof(resolved_name));
@@ -917,10 +929,16 @@ int32_t mz_zip_reader_get_raw(void *handle, uint8_t *raw)
     return MZ_OK;
 }
 
-void mz_zip_reader_set_legacy_encoding(void *handle, uint8_t legacy_encoding)
+void mz_zip_reader_set_encoding(void *handle, int32_t encoding)
 {
     mz_zip_reader *reader = (mz_zip_reader *)handle;
-    reader->legacy_encoding = legacy_encoding;
+    reader->encoding = encoding;
+}
+
+void mz_zip_reader_set_sign_required(void *handle, uint8_t sign_required)
+{
+    mz_zip_reader *reader = (mz_zip_reader *)handle;
+    reader->sign_required = sign_required;
 }
 
 void mz_zip_reader_set_overwrite_cb(void *handle, void *userdata, mz_zip_reader_overwrite_cb cb)
@@ -1057,7 +1075,7 @@ static int32_t mz_zip_writer_open_int(void *handle, void *stream, int32_t mode)
     if (err != MZ_OK)
     {
         mz_zip_writer_close(handle);
-        return MZ_STREAM_ERROR;
+        return err;
     }
 
     return MZ_OK;
@@ -1327,10 +1345,6 @@ int32_t mz_zip_writer_entry_close(void *handle)
         mz_stream_mem_create(&writer->file_extra_stream);
         mz_stream_mem_open(writer->file_extra_stream, NULL, MZ_OPEN_MODE_CREATE);
 
-        if ((writer->file_info.extrafield != NULL) && (writer->file_info.extrafield_size > 0))
-            mz_stream_mem_write(writer->file_extra_stream, writer->file_info.extrafield,
-                writer->file_info.extrafield_size);
-
         // Write sha256 hash to extrafield
         field_length_hash = 4 + MZ_HASH_SHA256_SIZE;
         err = mz_zip_extrafield_write(writer->file_extra_stream, MZ_ZIP_EXTENSION_HASH, field_length_hash);
@@ -1341,7 +1355,7 @@ int32_t mz_zip_writer_entry_close(void *handle)
         if (err == MZ_OK)
         {
             if (mz_stream_write(writer->file_extra_stream, sha256, sizeof(sha256)) != MZ_HASH_SHA256_SIZE)
-                err = MZ_STREAM_ERROR;
+                err = MZ_WRITE_ERROR;
         }
 
 #ifndef MZ_ZIP_NO_SIGNING
@@ -1349,6 +1363,10 @@ int32_t mz_zip_writer_entry_close(void *handle)
             err = mz_zip_writer_entry_sign(handle, sha256, sizeof(sha256), 
                 writer->cert_path, writer->cert_pwd);
 #endif
+
+        if ((writer->file_info.extrafield != NULL) && (writer->file_info.extrafield_size > 0))
+            mz_stream_mem_write(writer->file_extra_stream, writer->file_info.extrafield,
+                writer->file_info.extrafield_size);
 
         // Update extra field for central directory after adding extra fields
         mz_stream_mem_get_buffer(writer->file_extra_stream, (const void **)&extrafield);
@@ -1384,6 +1402,9 @@ int32_t mz_zip_writer_entry_sign(void *handle, uint8_t *message, int32_t message
     const char *cert_path, const char *cert_pwd)
 {
     mz_zip_writer *writer = (mz_zip_writer *)handle;
+    void *cert_stream = NULL;
+    uint8_t *cert_data = NULL;
+    int32_t cert_data_size = 0;
     int32_t err = MZ_OK;
     int32_t signature_size = 0;
     uint8_t *signature = NULL;
@@ -1399,10 +1420,31 @@ int32_t mz_zip_writer_entry_sign(void *handle, uint8_t *message, int32_t message
     if (cert_path == NULL)
         return MZ_PARAM_ERROR;
 
+    cert_data_size = (int32_t)mz_os_get_file_size(cert_path);
+    if (cert_data_size == 0)
+        return MZ_PARAM_ERROR;
+
+    cert_data = (uint8_t *)MZ_ALLOC(cert_data_size);
+
+    // Read pkcs12 certificate from disk
+    mz_stream_os_create(&cert_stream);
+    err = mz_stream_os_open(cert_stream, cert_path, MZ_OPEN_MODE_READ);
     if (err == MZ_OK)
     {
-        err = mz_crypt_sign(message, message_size, cert_path, cert_pwd, &signature, &signature_size);
+        if (mz_stream_os_read(cert_stream, cert_data, cert_data_size) != cert_data_size)
+            err = MZ_READ_ERROR;
+        mz_stream_os_close(cert_stream);
     }
+    mz_stream_os_delete(&cert_stream);
+
+    if (err == MZ_OK)
+    {
+        // Sign message with certificate
+        err = mz_crypt_sign(message, message_size, cert_data, cert_data_size, cert_pwd, 
+            &signature, &signature_size);
+    }
+
+    MZ_FREE(cert_data);
 
     if ((err == MZ_OK) && (signature != NULL))
     {
@@ -1411,7 +1453,7 @@ int32_t mz_zip_writer_entry_sign(void *handle, uint8_t *message, int32_t message
         if (err == MZ_OK)
         {
             if (mz_stream_write(writer->file_extra_stream, signature, signature_size) != signature_size)
-                err = MZ_STREAM_ERROR;
+                err = MZ_WRITE_ERROR;
         }
 
         MZ_FREE(signature);
@@ -1448,7 +1490,7 @@ int32_t mz_zip_writer_add_process(void *handle, void *stream, mz_stream_read_cb 
 
     written = mz_zip_writer_entry_write(handle, writer->buffer, read);
     if (written != read)
-        return MZ_STREAM_ERROR;
+        return MZ_WRITE_ERROR;
 
     return written;
 }

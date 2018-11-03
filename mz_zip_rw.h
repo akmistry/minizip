@@ -1,5 +1,5 @@
 /* mz_zip_rw.h -- Zip reader/writer
-   Version 2.6.0, October 8, 2018
+   Version 2.7.2, November 2, 2018
    part of the MiniZip project
 
    Copyright (C) 2010-2018 Nathan Moinvaziri
@@ -124,8 +124,11 @@ void    mz_zip_reader_set_raw(void *handle, uint8_t raw);
 int32_t mz_zip_reader_get_raw(void *handle, uint8_t *raw);
 // Gets whether or not it should save the entry raw
 
-void    mz_zip_reader_set_legacy_encoding(void *handle, uint8_t legacy_encoding);
+void    mz_zip_reader_set_encoding(void *handle, int32_t encoding);
 // Sets whether or not it should support cp437 in zip file names
+
+void    mz_zip_reader_set_sign_required(void *handle, uint8_t sign_required);
+// Sets whether or not it a signature is required 
 
 void    mz_zip_reader_set_overwrite_cb(void *handle, void *userdata, mz_zip_reader_overwrite_cb cb);
 // Callback for what to do when a file is being overwritten

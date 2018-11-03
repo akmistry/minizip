@@ -16,6 +16,7 @@ option(USE_PKCRYPT "Enables PKWARE traditional encryption" ON)
 option(USE_AES "Enables AES encryption" ON)
 option(USE_LIBCOMP "Enables Apple compression" OFF)
 option(USE_OPENSSL "Enables OpenSSL for encryption" OFF)
+option(USE_BRG "Enables Brian Gladman's encryption library" OFF)
 option(COMPRESS_ONLY "Only support compression" OFF)
 option(DECOMPRESS_ONLY "Only support decompression" OFF)
 option(BUILD_TEST "Builds minizip test executable" OFF)
@@ -35,7 +36,7 @@ set(INSTALL_PKGCONFIG_DIR ${CMAKE_INSTALL_LIBDIR}/pkgconfig CACHE PATH "Installa
 set(INSTALL_CMAKE_DIR ${CMAKE_INSTALL_LIBDIR}/cmake/minizip CACHE PATH "Installation directory for cmake files.")
 
 # Minizip library version
-set(VERSION "2.6.0")
+set(VERSION "2.7.2")
 
 # Minizip api version
 set(SOVERSION "2.5")
@@ -53,16 +54,23 @@ if(USE_ZLIB)
     set(ZLIB_ROOT ${DEF_ZLIB_ROOT} CACHE PATH "Parent directory of zlib installation")
     find_package(ZLIB)
     if(ZLIB_FOUND)
-        message(STATUS "Using ZLIB ${ZLIB_VERSION}")
+        message(STATUS "Using ZLIB ${ZLIB_VERSION_STRING}")
         include_directories(${ZLIB_INCLUDE_DIRS})
         add_definitions(-DHAVE_ZLIB)
     else()
-        message(STATUS "Using external ZLIB")
+        if (NOT ZLIB_TAG)
+            set(ZLIB_TAG master)
+        endif()
+        if (NOT ZLIB_REPOSITORY)
+            set(ZLIB_REPOSITORY https://github.com/madler/zlib)
+        endif()
+
+        message(STATUS "Using ZLIB ${ZLIB_REPOSITORY} ${ZLIB_TAG}")
 
         set(ZLIB_SOURCE_DIR ${CMAKE_CURRENT_BINARY_DIR}/lib/zlib)
-        set(ZLIB_INSTALL_DIR ${ZLIB_SOURCE_DIR}/install)
+        set(ZLIB_INSTALL_DIR ${CMAKE_CURRENT_BINARY_DIR}/install/zlib)
         set(ZLIB_INCLUDE_DIRS ${ZLIB_INSTALL_DIR}/include)
-        
+
         if(WIN32)
             if(${CMAKE_GENERATOR} MATCHES "Visual Studio.*")
                 set(ZLIB_LIBRARIES
@@ -81,17 +89,18 @@ if(USE_ZLIB)
             set(ZLIB_LIBRARIES
                 ${ZLIB_INSTALL_DIR}/lib/libz.a)
         endif()
-
+        
         ExternalProject_Add(zlib
             PREFIX zlib
-            GIT_REPOSITORY https://github.com/madler/zlib
-            GIT_TAG master
+            GIT_REPOSITORY ${ZLIB_REPOSITORY}
+            GIT_TAG ${ZLIB_TAG}
             SOURCE_DIR ${ZLIB_SOURCE_DIR}
             BUILD_IN_SOURCE 1
             INSTALL_DIR ${ZLIB_INSTALL_DIR}
             BUILD_BYPRODUCTS ${ZLIB_STATIC_LIBRARIES}
             CMAKE_CACHE_ARGS
                 -DCMAKE_INSTALL_PREFIX:STRING=${ZLIB_INSTALL_DIR}
+                -DZLIB_COMPAT:STRING=ON
         )
 
         include_directories(${ZLIB_INCLUDE_DIRS})
@@ -105,7 +114,7 @@ if(USE_BZIP2)
     set(BZIP2_ROOT ${DEF_BZIP2_ROOT} CACHE PATH "Parent directory of bzip2 installation")
     find_package(BZip2)
     if(BZIP2_FOUND)
-        message(STATUS "Using BZIP2 ${BZIP2_VERSION}")
+        message(STATUS "Using BZIP2 ${BZIP2_VERSION_STRING}")
         include_directories(${BZIP2_INCLUDE_DIRS})
         add_definitions(-DHAVE_BZIP2)
     endif()
@@ -142,6 +151,7 @@ set(MINIZIP_PUBLIC_HEADERS
     mz_strm_buf.h
     mz_strm_crc32.h
     mz_strm_mem.h
+    mz_strm_split.h
     mz_strm_os.h
     mz_zip.h
     mz_zip_rw.h)
@@ -162,8 +172,10 @@ endif()
 # Windows specific
 if(WIN32)
     list(APPEND MINIZIP_SRC "mz_os_win32.c" "mz_strm_os_win32.c")
-    if ((USE_PKCRYPT OR USE_AES) AND (NOT USE_OPENSSL AND NOT OPENSSL_FOUND))
-        list(APPEND MINIZIP_SRC "mz_crypt_win32.c")
+    if (USE_PKCRYPT OR USE_AES)
+        if (NOT USE_OPENSSL AND NOT OPENSSL_FOUND AND NOT USE_BRG)
+            list(APPEND MINIZIP_SRC "mz_crypt_win32.c")
+        endif()
     endif()
 
     add_definitions(-D_CRT_SECURE_NO_DEPRECATE)
@@ -179,10 +191,13 @@ if(UNIX)
     list(APPEND MINIZIP_SRC "mz_os_posix.c" "mz_strm_os_posix.c")
     
     if ((USE_PKCRYPT OR USE_AES) AND (NOT USE_OPENSSL AND NOT OPENSSL_FOUND))
-        list(APPEND MINIZIP_SRC "mz_crypt_brg.c")
-
-        add_definitions(-DMZ_ZIP_NO_ENCRYPTION)
-
+        
+        if (APPLE AND NOT USE_BRG)
+            list(APPEND MINIZIP_SRC "mz_crypt_apple.c")
+        else()
+            set(USE_BRG TRUE)
+        endif()
+        
         # Check to see which random generation functions we have 
         check_symbol_exists("getrandom" "sys/random.h" HAVE_GETRANDOM)
         if (HAVE_GETRANDOM)
@@ -212,28 +227,6 @@ if(UNIX)
                 endif()
             endif()
         endif()
-
-        set(BRG_SRC
-            lib/brg/aescrypt.c
-            lib/brg/aeskey.c
-            lib/brg/aestab.c
-            lib/brg/hmac.c
-            lib/brg/sha1.c
-            lib/brg/sha2.c)
-
-        set(BRG_PUBLIC_HEADERS
-            lib/brg/aes.h
-            lib/brg/aesopt.h
-            lib/brg/aestab.h
-            lib/brg/brg_endian.h
-            lib/brg/brg_types.h
-            lib/brg/hmac.h
-            lib/brg/sha1.h)
-
-        include_directories(lib/brg)
-
-        source_group("BRG" FILES ${BRG_SRC} ${BRG_PUBLIC_HEADERS})
-
     endif()
 
     # Setup and use large file macros if necessary
@@ -254,12 +247,39 @@ if(UNIX)
         add_definitions(-D_FILE_OFFSET_BITS=64)
     endif()
 
+    find_package(Iconv)
+    if (Iconv_FOUND)
+        message(STATUS "Using Iconv")
+        include_directories(${Iconv_INCLUDE_DIRS})
+    endif()
+
 endif()
 
 # Include compatibility layer
 if(USE_COMPAT)
     list(APPEND MINIZIP_SRC "mz_compat.c")
     list(APPEND MINIZIP_PUBLIC_HEADERS "mz_compat.h")
+
+    set(COMPAT_HEADER "\
+/* file.h -- Compatibility layer shim\n\
+   part of the MiniZip project\n\n\
+   This program is distributed under the terms of the same license as zlib.\n\
+   See the accompanying LICENSE file for the full text of the license.\n\
+*/\n\n\
+#ifndef MZ_COMPAT_FILE\n\
+#define MZ_COMPAT_FILE\n\
+#include \"mz_compat.h\"\n\
+#endif\n")
+
+    string(REPLACE "file.h" "zip.h" ZIP_COMPAT_HEADER ${COMPAT_HEADER})
+    string(REPLACE "MZ_COMPAT_FILE" "MZ_COMPAT_ZIP" ZIP_COMPAT_HEADER ${ZIP_COMPAT_HEADER})
+    file(WRITE "zip.h" ${ZIP_COMPAT_HEADER})
+    list(APPEND MINIZIP_PUBLIC_HEADERS "zip.h") 
+
+    string(REPLACE "file.h" "unzip.h" UNZIP_COMPAT_HEADER ${COMPAT_HEADER})
+    string(REPLACE "MZ_COMPAT_FILE" "MZ_COMPAT_UNZIP" UNZIP_COMPAT_HEADER ${UNZIP_COMPAT_HEADER})
+    file(WRITE "unzip.h" ${UNZIP_COMPAT_HEADER})
+    list(APPEND MINIZIP_PUBLIC_HEADERS "unzip.h")
 endif()
 
 # Include PKCRYPT
@@ -276,6 +296,35 @@ if(USE_AES)
 
     list(APPEND MINIZIP_SRC "mz_strm_wzaes.c")
     list(APPEND MINIZIP_PUBLIC_HEADERS "mz_strm_wzaes.h")
+endif()
+
+# Include BRG
+if(USE_BRG)
+    list(APPEND MINIZIP_SRC "mz_crypt_brg.c")
+
+    add_definitions(-DMZ_ZIP_NO_SIGNING)
+
+    set(BRG_SRC
+        lib/brg/aescrypt.c
+        lib/brg/aeskey.c
+        lib/brg/aestab.c
+        lib/brg/hmac.c
+        lib/brg/sha1.c
+        lib/brg/sha2.c)
+
+    set(BRG_PUBLIC_HEADERS
+        lib/brg/aes.h
+        lib/brg/aesopt.h
+        lib/brg/aestab.h
+        lib/brg/brg_endian.h
+        lib/brg/brg_types.h
+        lib/brg/hmac.h
+        lib/brg/sha1.h
+        lib/brg/sha2.h)
+
+    include_directories(lib/brg)
+
+    source_group("BRG" FILES ${BRG_SRC} ${BRG_PUBLIC_HEADERS})
 endif()
 
 # Include OpenSSL
@@ -500,11 +549,20 @@ endif()
 if(USE_LIBCOMP)
     target_link_libraries(${PROJECT_NAME} compression)
 endif()
+if(Iconv_FOUND AND NOT Iconv_IS_BUILT_IN)
+    target_link_libraries(${PROJECT_NAME} ${Iconv_LIBRARIES})
+endif()
 if(USE_OPENSSL AND OPENSSL_FOUND)
     target_link_libraries(${PROJECT_NAME} ${OPENSSL_LIBRARIES})
-endif()
-if(UNIX)
-    target_link_libraries(${PROJECT_NAME} ${LIBBSD_LIBRARIES})
+elseif(UNIX)
+    if(APPLE AND NOT USE_BRG)
+        message(STATUS "Using Security Framework")
+        target_link_libraries(${PROJECT_NAME} "-framework CoreFoundation")
+        target_link_libraries(${PROJECT_NAME} "-framework Security")
+        set_target_properties(${PROJECT_NAME} PROPERTIES LINK_FLAGS "-Wl,-F/Library/Frameworks")
+    else()
+        target_link_libraries(${PROJECT_NAME} ${LIBBSD_LIBRARIES})
+    endif()
 endif()
 
 target_include_directories(${PROJECT_NAME} PUBLIC $<INSTALL_INTERFACE:${INSTALL_INC_DIR}>)

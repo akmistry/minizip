@@ -1,5 +1,5 @@
 /* mz.h -- Errors codes, zip flags and magic
-   Version 2.6.0, October 8, 2018
+   Version 2.7.2, November 2, 2018
    part of the MiniZip project
 
    Copyright (C) 2010-2018 Nathan Moinvaziri
@@ -19,7 +19,7 @@ extern "C" {
 /***************************************************************************/
 
 // MZ_VERSION
-#define MZ_VERSION                      ("2.6.0")
+#define MZ_VERSION                      ("2.7.2")
 
 // MZ_ERROR
 #define MZ_OK                           (0)  // zlib
@@ -28,8 +28,10 @@ extern "C" {
 #define MZ_MEM_ERROR                    (-4) // zlib
 #define MZ_BUF_ERROR                    (-5) // zlib
 #define MZ_VERSION_ERROR                (-6) // zlib
+
 #define MZ_END_OF_LIST                  (-100)
 #define MZ_END_OF_STREAM                (-101)
+
 #define MZ_PARAM_ERROR                  (-102)
 #define MZ_FORMAT_ERROR                 (-103)
 #define MZ_INTERNAL_ERROR               (-104)
@@ -39,6 +41,13 @@ extern "C" {
 #define MZ_PASSWORD_ERROR               (-108)
 #define MZ_SUPPORT_ERROR                (-109)
 #define MZ_HASH_ERROR                   (-110)
+#define MZ_OPEN_ERROR                   (-111)
+#define MZ_CLOSE_ERROR                  (-112)
+#define MZ_SEEK_ERROR                   (-113)
+#define MZ_TELL_ERROR                   (-114)
+#define MZ_READ_ERROR                   (-115)
+#define MZ_WRITE_ERROR                  (-116)
+#define MZ_SIGN_ERROR                   (-117)
 
 // MZ_OPEN
 #define MZ_OPEN_MODE_READ               (0x01)
@@ -106,6 +115,8 @@ extern "C" {
 #define MZ_AES_ENCRYPTION_MODE_128      (0x01)
 #define MZ_AES_ENCRYPTION_MODE_192      (0x02)
 #define MZ_AES_ENCRYPTION_MODE_256      (0x03)
+#define MZ_AES_KEY_LENGTH(MODE)         (8 * (MODE & 3) + 8)
+#define MZ_AES_KEY_LENGTH_MAX           (32)
 #define MZ_AES_BLOCK_SIZE               (16)
 #define MZ_AES_HEADER_SIZE(MODE)        ((4 * (MODE & 3) + 4) + 2)
 #define MZ_AES_FOOTER_SIZE              (10)
@@ -118,6 +129,13 @@ extern "C" {
 #define MZ_HASH_SHA256                  (23)
 #define MZ_HASH_SHA256_SIZE             (32)
 #define MZ_HASH_MAX_SIZE                (256)
+
+// MZ_ENCODING
+#define MZ_ENCODING_CODEPAGE_437        (437)
+#define MZ_ENCODING_CODEPAGE_932        (932)
+#define MZ_ENCODING_CODEPAGE_936        (936)
+#define MZ_ENCODING_CODEPAGE_950        (950)
+#define MZ_ENCODING_UTF8                (65001)
 
 // MZ_UTILITY
 #define MZ_UNUSED(SYMBOL)               ((void)SYMBOL)

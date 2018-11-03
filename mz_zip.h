@@ -1,5 +1,5 @@
 /* mz_zip.h -- Zip manipulation
-   Version 2.6.0, October 8, 2018
+   Version 2.7.2, November 2, 2018
    part of the MiniZip project
 
    Copyright (C) 2010-2018 Nathan Moinvaziri
@@ -218,9 +218,6 @@ int32_t  mz_zip_unix_to_ntfs_time(time_t unix_time, uint64_t *ntfs_time);
 
 int32_t  mz_zip_path_compare(const char *path1, const char *path2, uint8_t ignore_case);
 // Compare two paths without regard to slashes
-
-int32_t  mz_zip_encoding_cp437_to_utf8(const char *source, char *target, int32_t max_target);
-// Converts ibm cp437 encoded string to utf8
 
 /***************************************************************************/
 
